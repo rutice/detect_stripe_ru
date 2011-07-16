@@ -16,6 +16,8 @@ int		block_v, block_h, offset_v, offset_h, max_w, pitch, thrs, adjust;
 double	rate;
 std::vector<int> flag;
 HWND	hbutton_scan_next, hbutton_scan_all;
+HWND	hstatic_detect;
+HWND	hstatic_result;
 
 // 定数
 const int STATE_STOP		= 0;
@@ -23,6 +25,8 @@ const int STATE_SCAN_NEXT	= 1;
 const int STATE_SCAN_ALL	= 2;
 const int ID_SCAN_NEXT		= 7000;
 const int ID_SCAN_ALL		= 7001;
+const int IDS_DETECT		= 7010;
+const int IDS_RESULT		= 7011;
 
 // 関数プロトタイプ
 void	multi_thread_func( int thread_id, int thread_num, void *param1, void *param2 );
@@ -43,7 +47,7 @@ int		check_default[] = 	{	0,								};
 
 FILTER_DLL filter = {
 	FILTER_FLAG_EX_INFORMATION | FILTER_FLAG_WINDOW_SIZE,
-	320, 145,
+	360, 180,
 	(TCHAR*)"縞判定フィルタ",
 	TRACK_N,
 	track_name,
@@ -410,6 +414,93 @@ next16pixels:
 	}
 }
 
+bool check_cycle(int *r) {
+	if (abs(r[0]) < 1500 && r[1] < 0 && r[3] > 0 && abs(r[4]) < 1500) {
+		return true;
+	}
+	return false;
+}
+
+bool detect_pattern(FILTER *fp, void *editp, int iFrame, int nCheck, int *result) {
+	int h, w, max_h, max_w;
+	SYS_INFO si;
+	FRAME_STATUS fs;
+	int vid0, vid1;
+	fp->exfunc->get_frame_size(editp, &w, &h);
+	fp->exfunc->get_sys_info(editp, &si);
+	max_h = h;//si.max_h;
+	max_w = si.vram_w;
+
+	SetWindowText(hstatic_detect, "");
+	SetWindowText(hstatic_result, "チェック中...");
+
+	if (fp->exfunc->get_frame_status(editp, iFrame, &fs) == FALSE) {
+		return false;
+	}
+	vid0 = fs.video;
+	PIXEL_YC *yc0, *yc1;
+	yc0 = (PIXEL_YC*)fp->exfunc->get_ycp_source_cache(editp, iFrame, 0);
+	if (yc0 == NULL) {
+		return false;
+	}
+	int hantei[10] = {0};
+	for (int x=1; x<36; x++) {
+		if (fp->exfunc->get_frame_status(editp, iFrame+x, &fs) == FALSE) {
+			return false;
+		}
+		vid1 = fs.video;
+		int diff = vid1 - vid0;
+		if (diff != 1) {
+			break;
+		}
+		yc1 = (PIXEL_YC*)fp->exfunc->get_ycp_source_cache(editp, iFrame+x, 0);
+		if (yc1 == NULL) {
+			return false;
+		}
+
+		int m[2] = {0};
+		for (int i=0; i<(h&0xFFFE); i+=2) {
+			for (int j=0; j<w; j++) {
+				m[0] = max(m[0], abs((yc0 + i * max_w + j)->y - (yc1 + i * max_w + j)->y));
+				m[1] = max(m[1], abs((yc0 + (i+1) * max_w + j)->y - (yc1 + (i+1) * max_w + j)->y));
+			}
+		}
+		yc0 = yc1;
+		vid0 = vid1;
+		result[(x-1) % 5] += m[0];
+		result[(x-1) % 5 + 5] += m[1];
+
+		double sa = (double)(m[0] - m[1]) / min(m[0], m[1]);
+		if (sa > 1.5) {
+			hantei[(iFrame+x-1) % 5] += (int)(sa * max(m[0], m[1]));
+		}
+		if (sa < -1.5) {
+			hantei[(iFrame+x-1) % 5] += (int)(sa * max(m[0], m[1]));
+		}
+	}
+
+	int *r = result;
+	char sz[256];
+	wsprintf(sz, "判定 0:%d, 1:%d, 2:%d, 3:%d, 4:%d", hantei[0], hantei[1], hantei[2], hantei[3], hantei[4]);
+	SetWindowText(hstatic_result, sz);
+		
+	// 確からしさチェック
+	for (int i=0; i<5; i++) {
+		hantei[i+5] = hantei[i];
+		if (check_cycle(hantei + i)) {
+			int cycle = i;
+			char s[6] = {'o', 'o', 'o', 'o', 'o', '\0'};
+			s[(cycle + 1) % 5] = 'x';
+			wsprintf(sz, "推定:%s", s);
+			SetWindowText(hstatic_detect, sz);
+			return true;
+		}
+	}
+
+	SetWindowText(hstatic_detect, "動きが無いか30fps");
+	return true;
+}
+
 
 //---------------------------------------------------------------------
 //		ウィンドウメッセージ処理関数
@@ -425,10 +516,16 @@ BOOL func_WndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, void *edit
 		pitch = si.vram_line_size;
 		#define CreateButton( str, x, y, w, h, id ) \
 			CreateWindowEx( 0, _T("BUTTON"), _T(str), WS_CHILD | WS_VISIBLE, x, y, w, h, hwnd, (HMENU)id, fp->dll_hinst, NULL )
+		#define CreateStatic( str, x, y, w, h, id ) \
+			CreateWindowEx( 0, _T("STATIC"), _T(str), WS_CHILD | WS_VISIBLE, x, y, w, h, hwnd, (HMENU)id, fp->dll_hinst, NULL )
 		hbutton_scan_next = CreateButton( "走査",    20, 88, 60, 22, ID_SCAN_NEXT );
 		hbutton_scan_all  = CreateButton( "全走査", 100, 88, 60, 22, ID_SCAN_ALL );
+		hstatic_detect  = CreateStatic( "", 170, 88, 120, 22, IDS_DETECT );
+		hstatic_result  = CreateStatic( "35フレームから適当に自動判定", 10, 115, 350, 22, IDS_RESULT );
 		SetWindowFont( hbutton_scan_next, si.hfont, 0 );
 		SetWindowFont( hbutton_scan_all,  si.hfont, 0 );
+		SetWindowFont( hstatic_detect,  si.hfont, 0 );
+		SetWindowFont( hstatic_result,  si.hfont, 0 );
 		EnableWindow( hbutton_scan_next, false );
 		EnableWindow( hbutton_scan_all,  false );
 		state = STATE_STOP;
@@ -443,6 +540,30 @@ BOOL func_WndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, void *edit
 		EnableWindow( hbutton_scan_next, false );
 		EnableWindow( hbutton_scan_all,  false );
 		return FALSE;
+	
+	case WM_FILTER_UPDATE:
+		if (fp->exfunc->is_filter_active(fp) && 
+			fp->exfunc->get_frame_n(editp) > 0) {
+			SetTimer(hwnd, 0, 1000, NULL);
+		} else {
+			SetWindowText(hstatic_detect, "");
+			SetWindowText(hstatic_result, "");
+		}
+		break;
+	
+	case WM_TIMER:
+		KillTimer(hwnd, 0);
+		if (editp == NULL) {
+			break;
+		}
+		do {
+			int r[10] = {0};
+			bool ret = detect_pattern(fp, editp, fp->exfunc->get_frame(editp), 5, r);
+			if (ret == false) {
+				SetWindowText(hstatic_result, "周期推測：あいまいです。");
+			}
+		} while(0);
+		break;
 
 	case WM_COMMAND:
 		if( fp->exfunc->is_filter_active( fp ) )
