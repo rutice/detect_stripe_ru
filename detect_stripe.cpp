@@ -28,6 +28,7 @@ const int ID_SCAN_NEXT		= 7000;
 const int ID_SCAN_ALL		= 7001;
 const int IDS_DETECT		= 7010;
 const int IDS_RESULT		= 7011;
+const int IDT_DETECT		= 0;
 
 // 関数プロトタイプ
 void	multi_thread_func( int thread_id, int thread_num, void *param1, void *param2 );
@@ -422,7 +423,22 @@ bool check_cycle(int *r) {
 	return false;
 }
 
-bool detect_pattern(FILTER *fp, void *editp, int iFrame, int nCheck, int *result) {
+template <typename T>
+T _max(T a, T b) {
+	return a > b ? a : b;
+}
+
+inline
+void get_y_max(PIXEL_YC *yc0, PIXEL_YC *yc1, int hstart, int hend, int w, int max_w, int m[2]) {
+	for (int i=hstart; i<(hend&0xFFFE); i+=2) {
+		for (int j=16; j<(w&0xFFF0)-16; j++) {
+			m[0] = max(m[0], abs((yc0 + i * max_w + j)->y - (yc1 + i * max_w + j)->y));
+			m[1] = max(m[1], abs((yc0 + (i+1) * max_w + j)->y - (yc1 + (i+1) * max_w + j)->y));
+		}
+	}
+}
+
+bool detect_pattern(FILTER *fp, void *editp, int iFrame, int nCheck) {
 	int h, w, max_h, max_w;
 	SYS_INFO si;
 	FRAME_STATUS fs;
@@ -459,36 +475,31 @@ bool detect_pattern(FILTER *fp, void *editp, int iFrame, int nCheck, int *result
 			return false;
 		}
 
-		int m[2] = {0};
-		for (int i=8; i<(h&0xFFFE)-8; i+=2) {
-			for (int j=16; j<(w&0xfff0)-16; j++) {
-				m[0] = max(m[0], abs((yc0 + i * max_w + j)->y - (yc1 + i * max_w + j)->y));
-				m[1] = max(m[1], abs((yc0 + (i+1) * max_w + j)->y - (yc1 + (i+1) * max_w + j)->y));
-			}
-		}
+		int m[2][2] = {{0, 0}, {2, 2}};
+		get_y_max(yc0, yc1, 8  , h/2, w, max_w, m[0]); // 上半分
+		get_y_max(yc0, yc1, h/2, h-8, w, max_w, m[1]); // 下半分
 		yc0 = yc1;
 		vid0 = vid1;
-		result[(x-1) % 5] += m[0];
-		result[(x-1) % 5 + 5] += m[1];
 
 		// TOP・BOTTOMフィールドの変化の変化を計算する
 		// ＋ならTOPのが変化が大きい、－ならBOTTOMのが変化が大きい
 		// DVD等では変化の無いフィールドは分母がほぼ0になるのでゼロ除算回避
-		double sa = (double)(m[0] - m[1]) / max(2, min(m[0], m[1]));
-		if (sa > 1.5) {
-			hantei[(iFrame+x-1) % 5] += (int)(sa * max(m[0], m[1]));
-		}
-		if (sa < -1.5) {
-			hantei[(iFrame+x-1) % 5] += (int)(sa * max(m[0], m[1]));
+		for (int i=0; i<2; i++) {
+			double sa = (double)(m[i][0] - m[i][1]) / max(2, min(m[i][0], m[i][1]));
+			if (sa > 1.5) {
+				hantei[(iFrame+x-1) % 5] += (int)(sa * max(m[i][0], m[i][1]));
+			}
+			if (sa < -1.5) {
+				hantei[(iFrame+x-1) % 5] += (int)(sa * max(m[i][0], m[i][1]));
+			}
 		}
 	}
 
-	int *r = result;
 	char sz[256];
 	wsprintf(sz, "判定 0:%d, 1:%d, 2:%d, 3:%d, 4:%d", hantei[0], hantei[1], hantei[2], hantei[3], hantei[4]);
 	SetWindowText(hstatic_result, sz);
 		
-	// 確からしさチェック
+	// 周期チェック
 	for (int i=0; i<5; i++) {
 		hantei[i+5] = hantei[i];
 		if (check_cycle(hantei + i)) {
@@ -548,7 +559,7 @@ BOOL func_WndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, void *edit
 	case WM_FILTER_UPDATE:
 		if (fp->exfunc->is_filter_active(fp) && 
 			fp->exfunc->get_frame_n(editp) > 0) {
-			SetTimer(hwnd, 0, 1000, NULL);
+			SetTimer(hwnd, IDT_DETECT, 750, NULL);
 		} else {
 			SetWindowText(hstatic_detect, "");
 			SetWindowText(hstatic_result, "");
@@ -556,13 +567,12 @@ BOOL func_WndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, void *edit
 		break;
 	
 	case WM_TIMER:
-		KillTimer(hwnd, 0);
+		KillTimer(hwnd, IDT_DETECT);
 		if (editp == NULL) {
 			break;
 		}
 		do {
-			int r[10] = {0};
-			bool ret = detect_pattern(fp, editp, fp->exfunc->get_frame(editp), 5, r);
+			bool ret = detect_pattern(fp, editp, fp->exfunc->get_frame(editp), 5);
 			if (ret == false) {
 				SetWindowText(hstatic_result, "周期推測：あいまいです。");
 			}
