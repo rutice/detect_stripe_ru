@@ -2,6 +2,7 @@
 //		縞判定フィルタ		by Bean
 //---------------------------------------------------------------------------------------------
 
+#include "stdafx.h"
 #include "filter.h"
 #include <WindowsX.h>
 #include <vector>
@@ -459,8 +460,8 @@ bool detect_pattern(FILTER *fp, void *editp, int iFrame, int nCheck, int *result
 		}
 
 		int m[2] = {0};
-		for (int i=0; i<(h&0xFFFE); i+=2) {
-			for (int j=0; j<w; j++) {
+		for (int i=8; i<(h&0xFFFE)-8; i+=2) {
+			for (int j=16; j<(w&0xfff0)-16; j++) {
 				m[0] = max(m[0], abs((yc0 + i * max_w + j)->y - (yc1 + i * max_w + j)->y));
 				m[1] = max(m[1], abs((yc0 + (i+1) * max_w + j)->y - (yc1 + (i+1) * max_w + j)->y));
 			}
@@ -470,7 +471,10 @@ bool detect_pattern(FILTER *fp, void *editp, int iFrame, int nCheck, int *result
 		result[(x-1) % 5] += m[0];
 		result[(x-1) % 5 + 5] += m[1];
 
-		double sa = (double)(m[0] - m[1]) / min(m[0], m[1]);
+		// TOP・BOTTOMフィールドの変化の変化を計算する
+		// ＋ならTOPのが変化が大きい、－ならBOTTOMのが変化が大きい
+		// DVD等では変化の無いフィールドは分母がほぼ0になるのでゼロ除算回避
+		double sa = (double)(m[0] - m[1]) / max(2, min(m[0], m[1]));
 		if (sa > 1.5) {
 			hantei[(iFrame+x-1) % 5] += (int)(sa * max(m[0], m[1]));
 		}
