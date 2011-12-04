@@ -12,7 +12,8 @@
 /* 定数 */
 const int TRK_THRESHOLD	= 0;
 const int TRK_CRITERION	= 1;
-const int TRACK_N		= 2;
+const int TRK_SKIPFRAME	= 2;
+const int TRACK_N		= 3;
 const int CHK_LUMA		= 0;
 const int CHK_INVERT	= 1;
 const int CHECK_N		= 2;
@@ -47,17 +48,17 @@ bool	SSE2Check();
 //---------------------------------------------------------------------
 //		フィルタ構造体定義
 //---------------------------------------------------------------------
-TCHAR	*track_name[] =		{	(TCHAR*)"検出閾値",	(TCHAR*)"判定基準"	};
-int		track_default[] =	{	8,		3	};
-int		track_s[] =			{	0,		1	};
-int		track_e[] =			{	15,		9	};
+TCHAR	*track_name[] =		{	(TCHAR*)"検出閾値",	(TCHAR*)"判定基準", (TCHAR*)"ﾁｪｯｸ間隔"	};
+int		track_default[] =	{	8,		3,		1	};
+int		track_s[] =			{	0,		1,		1	};
+int		track_e[] =			{	15,		9,		999	};
 
 TCHAR	*check_name[] = 	{	(TCHAR*)"輝度のみで判定",	(TCHAR*)"縞検出部分を反転する"	};
 int		check_default[] = 	{	1,		0	};
 
 FILTER_DLL filter = {
 	FILTER_FLAG_EX_INFORMATION | FILTER_FLAG_WINDOW_SIZE,
-	360, 180,
+	360, 210,
 	//320, 165,
 	(TCHAR*)"縞判定フィルタ",
 	TRACK_N,
@@ -71,7 +72,7 @@ FILTER_DLL filter = {
 	NULL, NULL, NULL,
 	func_WndProc,
 	NULL, NULL, NULL, 0,
-	(TCHAR*)"縞判定フィルタ ver 0.20",
+	(TCHAR*)"縞判定フィルタ ver 0.20 + ru02",
 };
 
 
@@ -240,7 +241,7 @@ BOOL func_proc( FILTER *fp, FILTER_PROC_INFO *fpip )
 				break;
 			}
 
-			++frame;
+			frame += fp->track[TRK_SKIPFRAME];
 		}
 
 		SendMessage( fp->hwnd, WM_COMMAND, state, 0 );
@@ -671,13 +672,15 @@ BOOL func_WndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, void *edit
 		
 		#define CreateStatic( str, x, y, w, h, id ) \
 			CreateWindowEx( 0, _T("STATIC"), _T(str), WS_CHILD | WS_VISIBLE, x, y, w, h, hwnd, (HMENU)id, fp->dll_hinst, NULL )
-		hstatic_detect  = CreateStatic( "", 170, 108, 120, 22, IDS_DETECT );
-		hstatic_result  = CreateStatic( "35フレームから適当に自動判定", 10, 135, 350, 22, IDS_RESULT );
+		int BASE_Y;
+		BASE_Y = 133;
+		hstatic_detect  = CreateStatic( "", 170, BASE_Y, 120, 22, IDS_DETECT );
+		hstatic_result  = CreateStatic( "35フレームから適当に自動判定", 10, BASE_Y + 27, 350, 22, IDS_RESULT );
 		SetWindowFont( hstatic_detect,  si.hfont, 0 );
 		SetWindowFont( hstatic_result,  si.hfont, 0 );
 
-		hbutton_scan_next = CreateButton( _T("走査"),    20, 108, 60, 22, ID_SCAN_NEXT, fp );
-		hbutton_scan_all  = CreateButton( _T("全走査"), 100, 108, 60, 22, ID_SCAN_ALL,  fp );
+		hbutton_scan_next = CreateButton( _T("走査"),    20, BASE_Y, 60, 22, ID_SCAN_NEXT, fp );
+		hbutton_scan_all  = CreateButton( _T("全走査"), 100, BASE_Y, 60, 22, ID_SCAN_ALL,  fp );
 		SendMessage( hbutton_scan_next, WM_SETFONT, (WPARAM)si.hfont, FALSE );
 		SendMessage( hbutton_scan_all,  WM_SETFONT, (WPARAM)si.hfont, FALSE );
 		EnableWindow( hbutton_scan_next, false );
@@ -745,6 +748,9 @@ BOOL func_WndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, void *edit
 					state = ID_SCAN_NEXT;
 					SetWindowText( hbutton_scan_next, _T("中止") );
 					EnableWindow( hbutton_scan_all, false );
+					if (fp->track[TRK_SKIPFRAME] % 5 == 0) {
+						fp->track[TRK_SKIPFRAME] = fp->track[TRK_SKIPFRAME] - 1;
+					}
 					return TRUE;
 				}
 				else // state == ID_SCAN_NEXT
@@ -762,6 +768,9 @@ BOOL func_WndProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam, void *edit
 					state = ID_SCAN_ALL;
 					SetWindowText( hbutton_scan_all, _T("中止") );
 					EnableWindow( hbutton_scan_next, false );
+					if (fp->track[TRK_SKIPFRAME] % 5 == 0) {
+						fp->track[TRK_SKIPFRAME] = fp->track[TRK_SKIPFRAME] - 1;
+					}
 					return TRUE;
 				}
 				else // state == ID_SCAN_ALL
